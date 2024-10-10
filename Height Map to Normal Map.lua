@@ -1,3 +1,8 @@
+--[[______   __
+  / ____/ | / / by: GNamimates, Discord: "@gn8.", Youtube: @GNamimates
+ / / __/  |/ / Height Map to Normal Map
+/ /_/ / /|  / Generates a normal map from a height map
+\____/_/ |_/ Source: https://github.com/lua-gods/aseprite-scripts/blob/main/Height%20Map%20to%20Normal%20Map.lua]]
 local sprite = app.sprite
 if not sprite then print("Sprite Not Found") return end
 local target_layer = app.layer
