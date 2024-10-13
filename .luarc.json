@@ -1,5 +1,5 @@
 {
-  "Lua.runtime.version": "5.3",
+  "runtime.version": "Lua 5.3",
   "workspace.library": [
       ".docs"
   ],
