@@ -29,7 +29,9 @@ local faceColors = {
    mesh = hexColor('#f9c4ff')
 }
 
-local bbmodel = {elements = {}}
+math.randomseed(os.time())
+
+local bbmodel
 local textures = {}
 local transaction = false
 -- functions
@@ -63,6 +65,66 @@ do -- why are points in blockbench not sorted already
          tbl[2], tbl[3] = tbl[3], tbl[2]
       end
    end
+end
+
+local function newReferenceLayer(s, name)
+   local layerId = tostring(math.random())
+   app.command.newLayer{
+      name = layerId,
+      reference = true,
+   }
+   local layer ---@type Layer -- find the layer
+   for _, v in ipairs(s.layers) do
+      if v.name == layerId then
+         layer = v
+         break
+      end
+   end
+   if name then
+      layer.name = name
+   end
+   return layer
+end
+
+local function generateMeshSlices(shapes)
+   local width = sprite.width
+   local height = sprite.height
+   local scale = dialog.data.meshesQuality
+   local brush = Brush{
+      size = dialog.data.meshesLineWidth --[[@as number]]
+   }
+   -- create reference layer for mesh slices
+   local layer = newReferenceLayer(sprite, 'mesh slices')
+   layer.stackIndex = #sprite.layers + 1 -- move to top
+   local image = Image(width * scale, height * scale)
+   -- add image to reference, i couldnt find better way to scale the reference 
+   sprite:resize(width * scale, height * scale)
+   sprite:newCel(
+      layer,
+      app.frame,
+      image
+   )
+   local cel = layer:cel(app.frame)
+   -- render mesh
+   for _, shape in pairs(shapes) do
+      local points = {}
+      for _, v in ipairs(shape) do
+         table.insert(points, Point(v.uv.x * scale, v.uv.y * scale))
+      end
+      table.insert(points, points[1]) -- make loop
+      for i = 1, #points - 1 do
+         app.useTool{
+            tool = 'line',
+            color = faceColors.mesh,
+            points = {points[i], points[i + 1]},
+            cel = cel,
+            brush = brush
+         }
+      end
+   end
+   sprite:resize(width, height)
+   -- force layers to be reloaded
+   sprite:deleteLayer(sprite:newLayer())
 end
 
 local function slicesTransaction()
@@ -104,7 +166,9 @@ local function slicesTransaction()
          elseif element.type == 'mesh' then
             for _, face in pairs(element.faces) do
                if face.texture == textureToUse then
-                  local shape = {}
+                  local shape = {
+                     name = element.name .. ' | ' .. 'mesh'
+                  }
                   for _, vertexId in ipairs(face.vertices) do
                      local uv = {x = face.uv[vertexId][1], y = face.uv[vertexId][2]}
                      local pos = element.vertices[vertexId]
@@ -115,10 +179,6 @@ local function slicesTransaction()
                   end
                   -- sort vertices
                   sortMeshVertices(shape)
-                  -- remove position
-                  for i, v in ipairs(shape) do
-                     shape[i] = v.uv
-                  end
                   table.insert(meshShapes, shape)
                end
             end
@@ -126,36 +186,51 @@ local function slicesTransaction()
       end
    end
    -- add mesh slices
-   for _, v in pairs(meshShapes) do
-      if #v == 4 then
-         if ( -- check if shape is axis aligned rectangle
-            v[1].x == v[2].x and v[3].x == v[4].x and
-            v[1].y == v[4].y and v[2].y == v[3].y
-            ) or (
-            v[1].y == v[2].y and v[3].y == v[4].y and
-            v[1].x == v[4].x and v[2].x == v[3].x
+   for i = 1, #meshShapes do
+      local v = meshShapes[i]
+      if
+         (
+            #v == 4
+            and
+            (
+               ( -- check if shape is axis aligned rectangle
+               v[1].uv.x == v[2].uv.x and v[3].uv.x == v[4].uv.x and
+               v[1].uv.y == v[4].uv.y and v[2].uv.y == v[3].uv.y
+               ) or (
+               v[1].uv.y == v[2].uv.y and v[3].uv.y == v[4].uv.y and
+               v[1].uv.x == v[4].uv.x and v[2].uv.x == v[3].uv.x
+               )
             )
             and
             ( -- check if shape is aligned to grid
-               v[1].x % 1 == 0 and v[1].y % 1 == 0 and
-               v[2].x % 1 == 0 and v[2].y % 1 == 0 and
-               v[3].x % 1 == 0 and v[3].y % 1 == 0 and
-               v[4].x % 1 == 0 and v[4].y % 1 == 0
+               v[1].uv.x % 1 == 0 and v[1].uv.y % 1 == 0 and
+               v[2].uv.x % 1 == 0 and v[2].uv.y % 1 == 0 and
+               v[3].uv.x % 1 == 0 and v[3].uv.y % 1 == 0 and
+               v[4].uv.x % 1 == 0 and v[4].uv.y % 1 == 0
             )
-         then
-            local min = {math.min(v[1].x, v[2].x, v[3].x ,v[4].x), math.min(v[1].y, v[2].y, v[3].y, v[4].y)}
-            local max = {math.max(v[1].x, v[2].x, v[3].x ,v[4].x), math.max(v[1].y, v[2].y, v[3].y, v[4].y)}
-            table.insert(slices, {
-               rectangle = Rectangle(
-                  min[1],
-                  min[2],
-                  max[1] - min[1],
-                  max[2] - min[2]
-               ),
-               name = 'blep',
-               color = faceColors.mesh
-            })
+         )
+         or
+         dialog.data.meshBoundingBox
+      then
+         local min = {v[1].uv.x, v[1].uv.y}
+         local max = {v[1].uv.x, v[1].uv.y}
+         for k = 2, #v do
+            min[1] = math.min(min[1], v[k].uv.x)
+            min[2] = math.min(min[2], v[k].uv.y)
+            max[1] = math.max(max[1], v[k].uv.x)
+            max[2] = math.max(max[2], v[k].uv.y)
          end
+         table.insert(slices, {
+            rectangle = Rectangle(
+               min[1],
+               min[2],
+               max[1] - min[1],
+               max[2] - min[2]
+            ),
+            name = v.name,
+            color = faceColors.mesh
+         })
+         meshShapes[i] = nil
       end
    end
    -- add slices
@@ -164,11 +239,17 @@ local function slicesTransaction()
       slice.name = v.name
       slice.color = v.color
    end
+   if dialog.data.renderMeshes and next(meshShapes) then
+      generateMeshSlices(meshShapes)
+   end
    -- finish transaction
    transaction = true
 end
 
 local function reloadSlices()
+   if not bbmodel then
+      return
+   end
    if transaction then
       app.undo()
       transaction = false
@@ -275,6 +356,39 @@ dialog:check{
    id = 'includeInvisible',
    text = 'include invisible',
    onclick = reloadSlices
+}
+
+dialog:separator{text = 'mesh settings'}
+dialog:check{
+   id = 'meshBoundingBox',
+   text = 'render bounding boxes',
+   onclick = reloadSlices
+}
+
+dialog:newrow()
+dialog:check{
+   id = 'renderMeshes',
+   text = 'render meshes (slow)',
+   onclick = reloadSlices
+}
+
+dialog:slider{
+   id = 'meshesLineWidth',
+   label = 'line width:',
+   value = 1,
+   min = 1,
+   max = 16,
+   onrelease = reloadSlices
+}
+
+local spriteSize = math.sqrt(sprite.width ^ 2 + sprite.height ^ 2)
+dialog:slider{
+   id = 'meshesQuality',
+   label = 'quality:',
+   value = spriteSize > 1024 and 2 or spriteSize > 512 and 3 or spriteSize > 256 and 4 or 6,
+   min = 1,
+   max = 16,
+   onrelease = reloadSlices
 }
 
 dialog:separator{}
