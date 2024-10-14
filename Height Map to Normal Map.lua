@@ -8,8 +8,7 @@
   - this is the fault of the preview layer being a different transaction from the final layer.
 
   --TODO
-   - unify how the selected height is gathered.
-   - un hard code normal map code
+   - add a non linear strength filter to normalize the normals in the normal map
   
 ------------------------------]]
 
@@ -24,7 +23,7 @@ if not target_layer then print("No Layer Selected") return end
 ---@param b integer
 ---@return integer
 local function grayscale(r,g,b)
-  return math.floor(0.299*r + 0.587*g + 0.114*b + 0.5)
+  return 0.299*r + 0.587*g + 0.114*b + 0.5
 end
 
 ---@param clri integer
@@ -73,12 +72,63 @@ app.transaction("Normal Map Preview",function ()
   preview_layer.name = "Preview"
   preview_layer.isEditable = false
 
-local lookup = {
-  ["Always Top Left"] = {-1,-1},
-   ["Always Top Right"] = { 1,-1},
- ["Always Bottom Left"] = {-1, 1},
-["Always Bottom Right"] = { 1, 1},
+local offsets = {
+  {-1,-1},
+  {0,-1},
+  {1,-1},
+  {-1,0},
+  {1,0},
+  {-1,1},
+  {0,1},
+  {1,1},
 }
+
+local lookup = {
+    ["Always Top Left"] = {{-1,-1}},
+   ["Always Top Right"] = {{ 1,-1}},
+ ["Always Bottom Left"] = {{-1, 1}},
+["Always Bottom Right"] = {{ 1, 1}},
+}
+
+
+
+---@param img Image
+---@param x integer
+---@param y integer
+---@return integer
+---@return integer
+local function height(img,x,y)
+  local r,g,b,a = rgba(clr(img,x,y))
+  return grayscale(r,g,b),a
+end
+
+
+---@param img Image
+---@param x integer
+---@param y integer
+---@param bias number
+---@param offsets {[1]:integer, [2]:integer}[]
+local function getNormal(img,x,y,offsets,bias)
+  local nx,ny = 0,0
+  local root_height,alpha = height(img,x,y)
+  local contributed = 0
+  if alpha == 0 then return 0,0 end
+  for i, o in pairs(offsets) do
+    local snlen = math.sqrt(o[1]^2 + o[2]^2)
+    local sample_height,sampled_alpha = height(img,x+o[1],y+o[2])
+    if sampled_alpha ~= 0 then
+      local delta = sample_height - root_height
+      contributed = contributed + delta * bias
+      nx = nx + o[1] / snlen * delta
+      ny = ny + o[2] / snlen * delta
+    end
+  end
+  local clen = math.max(contributed,1)
+  nx = math.max(math.min(nx / clen,254),-254)
+  ny = math.max(math.min(ny / clen,254),-254)
+  
+  return nx,ny
+end
 
 
 local function updatePreview()
@@ -102,66 +152,17 @@ local function updatePreview()
           local main_height = grayscale(rgba(clr(target_img,x,y)))
           local dx,dy
           
-          if (dialog.data.mode or "") == "Lowest Adjacent" then
-            do
-              local r,g,b,a = rgba(clr(target_img,x+1,y))
-              local height1 = grayscale(r,g,b)
-              dx = main_height-height1
-              
-              r,g,b,a = rgba(clr(target_img,x-1,y))
-              local height2 = grayscale(r,g,b)
-              height2 = grayscale(r,g,b)
-              if height2 < height1 then dx = height2-main_height end
-            end
-            
-            do
-              local r,g,b,a = rgba(clr(target_img,x,y+1))
-              local height1 = grayscale(r,g,b)
-              dy = main_height-height1
-              
-              r,g,b,a = rgba(clr(target_img,x,y-1))
-              local height2 = grayscale(r,g,b)
-              if height2 < height1 then dy = height2-main_height end
-            end
-          elseif (dialog.data.mode or "") == "Highest Adjacent" then
-            do
-              local r,g,b,a = rgba(clr(target_img,x+1,y))
-              local height1 = grayscale(r,g,b)
-              dx = main_height-height1
-              
-              r,g,b,a = rgba(clr(target_img,x-1,y))
-              local height2 = grayscale(r,g,b)
-              height2 = grayscale(r,g,b)
-              if height2 > height1 then dx = height2-main_height end
-            end
-            
-            do
-              local r,g,b,a = rgba(clr(target_img,x,y+1))
-              local height1 = grayscale(r,g,b)
-              dy = main_height-height1
-              
-              r,g,b,a = rgba(clr(target_img,x,y-1))
-              local height2 = grayscale(r,g,b)
-              if height2 > height1 then dy = height2-main_height end
-            end
-          else
-            local ox,oy = table.unpack(lookup[dialog.data.mode])
-            local r,g,b,a = rgba(clr(target_img,x+ox,y))
-            if a > 0 then dx = (grayscale(r,g,b) - main_height) * ox end
-            local r,g,b,a = rgba(clr(target_img,x,y+oy))
-            if a > 0 then dy = (grayscale(r,g,b) - main_height) * oy end
-          end
+          dx,dy = getNormal(target_img,x,y,offsets,dialog.data.bias / 10)
           
           local strength = dialog.data.strength / 100
           
           dx = dx
           dy = dy * (dialog.data.flip_y and -1 or 1)
           
-          local len = math.sqrt(((dx*dx) + (dy*dy)) * math.abs(strength)) / 255
-          local nx = dx * strength / (len == 0 and 1 or len) * 0.5 + 128
-          local ny = dy * strength / (len == 0 and 1 or len) * 0.5 + 128
-          local nz = (1-len)*255
-          
+          local len = math.sqrt(((dx*dx) + (dy*dy)) * math.abs(strength))
+          local nx = dx * strength * 0.5 + 128
+          local ny = dy * strength * 0.5 + 128
+          local nz = (255-len)
           preview_img:drawPixel(x,y,app.pixelColor.rgba(nx,ny,nz,a))
         end
       end
@@ -176,18 +177,13 @@ local function updatePreview()
   app:refresh()
 end
 
-dialog:combobox{
-  id="mode",
-  label="Differentiation Bias",
-  option="Lowest Adjacent",
-  options={
-    "Highest Adjacent",
-    "Lowest Adjacent",
-    "Always Top Left",
-    "Always Top Right",
-    "Always Bottom Left",
-    "Always Bottom Right",
-    onchange = updatePreview},
+dialog:slider{
+  id="bias",
+  label="bias",
+  min=-1,
+  max=1,
+  value=1,
+  onchange = updatePreview,
 }
 
 dialog:check{
