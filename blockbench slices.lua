@@ -26,12 +26,45 @@ local faceColors = {
    west = hexColor('#fea7a5'),
    up = hexColor('#ecf8fd'),
    down = hexColor('#6e788c'),
+   mesh = hexColor('#f9c4ff')
 }
 
 local bbmodel = {elements = {}}
 local textures = {}
 local transaction = false
 -- functions
+local sortMeshVertices
+do -- why are points in blockbench not sorted already
+   local function cross(a, b)
+      return {
+         x = a.y * b.z - a.z * b.y,
+         y = a.z * b.x - a.x * b.z,
+         z = a.x * b.y - a.y * b.x
+      }
+   end
+
+   local function test(a, b, c, d)
+      b = {x = b.x - a.x, y = b.y - a.y, z = b.z - a.z}
+      c = {x = c.x - a.x, y = c.y - a.y, z = c.z - a.z}
+      d = {x = d.x - a.x, y = d.y - a.y, z = d.z - a.z}
+
+      a = {x = b.x, y = b.y, z = b.z}
+      a = cross(a, c)
+      a = cross(a, d)
+
+      return a.x * b.x + a.y * b.y + a.z * b.z > 0
+   end
+   function sortMeshVertices(tbl)
+      if #tbl <= 3 then return end
+
+      if test(tbl[2].pos, tbl[3].pos, tbl[1].pos, tbl[4].pos) then
+         tbl[1], tbl[2], tbl[3] = tbl[3], tbl[1], tbl[2]
+      elseif test(tbl[1].pos, tbl[2].pos, tbl[3].pos, tbl[4].pos) then
+         tbl[2], tbl[3] = tbl[3], tbl[2]
+      end
+   end
+end
+
 local function slicesTransaction()
    -- remove old slices
    if not dialog.data.keepSlices then
@@ -45,6 +78,7 @@ local function slicesTransaction()
    end
    -- read slices
    local slices = {}
+   local meshShapes = {}
    local textureToUse = textures[dialog.data.modelTexture].id
    for _, element in ipairs(bbmodel.elements) do
       local visible = element.visibility
@@ -63,10 +97,64 @@ local function slicesTransaction()
                         max[2] - min[2]
                      ),
                      name = element.name .. ' | ' .. faceName,
-                     face = faceName
+                     color = faceColors[faceName] or Color{r = 255, g = 255, b = 255, a = 255}
                   })
                end
             end
+         elseif element.type == 'mesh' then
+            for _, face in pairs(element.faces) do
+               if face.texture == textureToUse then
+                  local shape = {}
+                  for _, vertexId in ipairs(face.vertices) do
+                     local uv = {x = face.uv[vertexId][1], y = face.uv[vertexId][2]}
+                     local pos = element.vertices[vertexId]
+                     table.insert(shape, {
+                        uv = uv,
+                        pos = {x = pos[1], y = pos[2], z = pos[3]}
+                     })
+                  end
+                  -- sort vertices
+                  sortMeshVertices(shape)
+                  -- remove position
+                  for i, v in ipairs(shape) do
+                     shape[i] = v.uv
+                  end
+                  table.insert(meshShapes, shape)
+               end
+            end
+         end
+      end
+   end
+   -- add mesh slices
+   for _, v in pairs(meshShapes) do
+      if #v == 4 then
+         if ( -- check if shape is axis aligned rectangle
+            v[1].x == v[2].x and v[3].x == v[4].x and
+            v[1].y == v[4].y and v[2].y == v[3].y
+            ) or (
+            v[1].y == v[2].y and v[3].y == v[4].y and
+            v[1].x == v[4].x and v[2].x == v[3].x
+            )
+            and
+            ( -- check if shape is aligned to grid
+               v[1].x % 1 == 0 and v[1].y % 1 == 0 and
+               v[2].x % 1 == 0 and v[2].y % 1 == 0 and
+               v[3].x % 1 == 0 and v[3].y % 1 == 0 and
+               v[4].x % 1 == 0 and v[4].y % 1 == 0
+            )
+         then
+            local min = {math.min(v[1].x, v[2].x, v[3].x ,v[4].x), math.min(v[1].y, v[2].y, v[3].y, v[4].y)}
+            local max = {math.max(v[1].x, v[2].x, v[3].x ,v[4].x), math.max(v[1].y, v[2].y, v[3].y, v[4].y)}
+            table.insert(slices, {
+               rectangle = Rectangle(
+                  min[1],
+                  min[2],
+                  max[1] - min[1],
+                  max[2] - min[2]
+               ),
+               name = 'blep',
+               color = faceColors.mesh
+            })
          end
       end
    end
@@ -74,7 +162,7 @@ local function slicesTransaction()
    for _, v in pairs(slices) do
       local slice = sprite:newSlice(v.rectangle)
       slice.name = v.name
-      slice.color = faceColors[v.face] or Color{r = 255, g = 255, b = 255, a = 255}
+      slice.color = v.color
    end
    -- finish transaction
    transaction = true
@@ -85,10 +173,18 @@ local function reloadSlices()
       app.undo()
       transaction = false
    end
+   local ok, err
    app.transaction(
       'generate slices from bbmodel',
-      slicesTransaction
+      function()
+         ok, err = pcall(slicesTransaction)
+      end
    )
+   if not ok then
+      app.undo()
+      print('transaction failed')
+      print(err)
+   end
    app.refresh()
 end
 
