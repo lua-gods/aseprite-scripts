@@ -34,6 +34,9 @@ math.randomseed(os.time())
 local bbmodel
 local textures = {}
 local transaction = false
+local suggestedModelsPaths = {}
+local lastLoadPath = ''
+local lastLoadTime = -1
 -- functions
 local sortMeshVertices
 do -- why are points in blockbench not sorted already
@@ -97,7 +100,7 @@ local function generateMeshSlices(shapes)
    local layer = newReferenceLayer(sprite, 'mesh slices')
    layer.stackIndex = #sprite.layers + 1 -- move to top
    local image = Image(width * scale, height * scale)
-   -- add image to reference, i couldnt find better way to scale the reference 
+   -- add image to reference, i couldnt find better way to scale the reference
    sprite:resize(width * scale, height * scale)
    sprite:newCel(
       layer,
@@ -269,45 +272,41 @@ local function reloadSlices()
    app.refresh()
 end
 
-local function loadModel()
-   -- check if correct file
-   local filePath = dialog.data.file
-   if type(filePath) ~= 'string' then
-      print('no file found')
-      return
-   end
-   if not filePath:match('%.bbmodel$') then
-      print('file is not bbmodel')
-      return
-   end
+---returns table with model info when read successfully or with string as second return value with error
+---@param filePath string
+---@return table?, string?
+local function readModel(filePath)
    local file = io.open(filePath, "r")
    if not file then
-      print('failed to open file')
-      return
+      return nil, 'failed to open file'
    end
    -- read file
    local fileContent = file:read "*a"
    file:close()
-   bbmodel = json.decode(fileContent)
+   -- read json
+   local success, modelJson = pcall(json.decode, fileContent) --[[@as table|string|nil]]
+   if not success then
+      return nil, 'reading json\n' .. tostring(modelJson)
+   end
    -- add textures to list
-   textures = {}
-   local texturesList = {}
-   for id, v in ipairs(bbmodel.textures) do
+   local myTextures = {}
+   local texturesPaths = {}
+   for id, v in ipairs(modelJson.textures) do
       local name = v.relative_path or v.path
-      textures[name] = {
+      myTextures[name] = {
          id = id - 1,
          data = v
       }
-      table.insert(texturesList, name)
+      table.insert(texturesPaths, name)
    end
-   -- find texture to use 
-   local textureToUse = ''
+   -- find texture to use
+   local textureToUse = nil
    for _, patterns in pairs(compareFilePatterns) do
       local spritePath = sprite.filename
       for _, v in pairs(patterns) do
          spritePath = string[v.func](spritePath, table.unpack(v)) or spritePath
       end
-      for name, v in pairs(textures) do
+      for name, v in pairs(myTextures) do
          local path = v.data.path
          for _, v2 in pairs(patterns) do
             path = string[v2.func](path, table.unpack(v2)) or path
@@ -319,22 +318,124 @@ local function loadModel()
       end
       if textureToUse then break end
    end
-   -- update things
+   -- finish
+   return {
+      bbmodel = modelJson,
+      textureToUse = textureToUse,
+      texturesPaths = texturesPaths,
+      textures = myTextures
+   }
+end
+
+local function loadModel()
+   -- check if correct file
+   local filePath = dialog.data.file
+   local suggestedModel = dialog.data.suggestedModels --[[@as string]]
+   if suggestedModel ~= '' then
+      filePath = suggestedModelsPaths[suggestedModel] or filePath
+   end
+   if type(filePath) ~= 'string' then
+      print('no file found')
+      return
+   end
+   if filePath == '' then
+      return
+   end
+   if filePath == sprite.filename then -- sprite cant be model
+      return
+   end
+   if not app.fs.isFile(filePath) then
+      return
+   end
+   if not filePath:match('%.bbmodel$') then
+      print('file is not bbmodel')
+      return
+   end
+   local currentLoadTime = os.time()
+   if lastLoadPath == filePath and currentLoadTime == lastLoadTime then
+      return
+   end
+   lastLoadTime = currentLoadTime
+   lastLoadPath = filePath
+   local modelData, err = readModel(filePath)
+   if err then
+      print(err)
+      return
+   end
+   -- set variables
+   bbmodel = modelData.bbmodel
+   textures = modelData.textures
+   -- update dialog
    dialog:modify{
       id = 'modelTexture',
-      option = textureToUse,
-      options = texturesList
+      option = modelData.textureToUse or '',
+      options = modelData.texturesPaths
    }
+end
+
+local function searchModels()
+   suggestedModelsPaths = {}
+   local suggestedList = {''}
+   local searchPath = app.fs.joinPath(sprite.filename, '..') -- go back to directory
+   local displayPath = ''
+   for _ = 1, 4 do -- depth
+      local finishSearch = false
+      for _, filename in pairs(app.fs.listFiles(searchPath)) do
+         if filename:match('^avatar%.jsonc?$') then
+            finishSearch = true
+         elseif filename:match('%.bbmodel$') then
+            local path = app.fs.joinPath(searchPath, filename)
+            local success, modelData, err = pcall(readModel, path)
+            if success and modelData then
+               if modelData.textureToUse then
+                  local myDisplayPath = displayPath..filename
+                  suggestedModelsPaths[myDisplayPath] = path
+                  table.insert(suggestedList, myDisplayPath)
+               end
+            else -- elseif success
+               -- maybe consider doing something?
+            end
+         end
+      end
+      if finishSearch then
+         break
+      end
+      displayPath = displayPath..'../'
+      searchPath = app.fs.joinPath(searchPath, '..')
+   end
+   dialog:modify{
+      id = "suggestedModels",
+      option = suggestedList[1] or '',
+      options = suggestedList
+   }
+end
+
+local function loadModelFromFile()
+   dialog:modify{
+      id = "suggestedModels",
+      option = ''
+   }
+   loadModel()
 end
 
 -- ui
 dialog:file{
    label = 'model:',
    id = 'file',
-   filename = sprite.filename,
+   -- filename = sprite.filename, -- not needed anymore
    filetypes = {'bbmodel'},
+   onchange = loadModelFromFile
+}
+
+dialog:combobox{
+   label = "suggested:",
+   id = "suggestedModels",
+   option = '',
+   options = {},
    onchange = loadModel
 }
+
+searchModels()
 
 dialog:separator{text = 'settings'}
 dialog:combobox{
