@@ -311,7 +311,7 @@ local function readModel(filePath)
          for _, v2 in pairs(patterns) do
             path = string[v2.func](path, table.unpack(v2)) or path
          end
-         if spritePath == path then
+         if spritePath:match('[^/\\]*$') == path:match('[^/\\]*$') then
             textureToUse = name
             break
          end
@@ -376,7 +376,7 @@ end
 local function searchModels()
    suggestedModelsPaths = {}
    local suggestedList = {''}
-   local searchPath = app.fs.joinPath(sprite.filename, '..') -- go back to directory
+   local searchPath = app.fs.normalizePath(app.fs.joinPath(sprite.filename, '..')) -- go back to directory
    local displayPath = ''
    for _ = 1, 4 do -- depth
       local finishSearch = false
@@ -393,6 +393,7 @@ local function searchModels()
                   table.insert(suggestedList, myDisplayPath)
                end
             else -- elseif success
+               -- print(err)
                -- maybe consider doing something?
             end
          end
