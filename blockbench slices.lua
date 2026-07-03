@@ -307,13 +307,15 @@ local function readModel(filePath)
          spritePath = string[v.func](spritePath, table.unpack(v)) or spritePath
       end
       for name, v in pairs(myTextures) do
-         local path = v.data.path
-         for _, v2 in pairs(patterns) do
-            path = string[v2.func](path, table.unpack(v2)) or path
-         end
-         if spritePath:match('[^/\\]*$') == path:match('[^/\\]*$') then
-            textureToUse = name
-            break
+         local path = v.data.path or v.data.relative_path
+         if path then
+            for _, v2 in pairs(patterns) do
+               path = string[v2.func](path, table.unpack(v2)) or path
+            end
+            if spritePath:match('[^/\\]*$') == path:match('[^/\\]*$') then
+               textureToUse = name
+               break
+            end
          end
       end
       if textureToUse then break end
